@@ -17,7 +17,9 @@ if ! echo "${SECRETS_JSON}" | jq empty 2>/dev/null; then
 fi
 
 # Process each secret
-echo "${SECRETS_JSON}" | jq -c '.[]' | while IFS= read -r secret; do
+had_failure=0
+
+while IFS= read -r secret; do
     secret_name=$(echo "${secret}" | jq -r '.name')
 
     # Validate secret name contains only safe characters
@@ -51,8 +53,14 @@ echo "${SECRETS_JSON}" | jq -c '.[]' | while IFS= read -r secret; do
     if modal secret create "${secret_name}" "${args[@]}" --force; then
         echo "Secret ${secret_name} created/updated successfully"
     else
-        echo "Warning: Failed to create secret ${secret_name}"
+        echo "Error: Failed to create secret ${secret_name}" >&2
+        had_failure=1
     fi
-done
+done < <(echo "${SECRETS_JSON}" | jq -c '.[]')
+
+if [[ "${had_failure}" -ne 0 ]]; then
+    echo "One or more Modal secrets failed to create" >&2
+    exit 1
+fi
 
 echo "All Modal secrets processed successfully"

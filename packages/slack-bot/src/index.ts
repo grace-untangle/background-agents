@@ -720,8 +720,8 @@ app.post("/events", async (c) => {
     duration_ms: Date.now() - startTime,
   });
 
-  // Respond immediately (Slack requires response within 3 seconds)
-  return c.json({ ok: true });
+  // Respond immediately (Slack requires a prompt acknowledgement).
+  return new Response(null, { status: 200 });
 });
 
 // Slack Interactions (buttons, modals, etc.)
@@ -752,21 +752,38 @@ app.post("/interactions", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  const payloadStr = new URLSearchParams(body).get("payload") || "{}";
-  const payload = JSON.parse(payloadStr);
+  c.executionCtx.waitUntil(
+    (async () => {
+      try {
+        const payloadStr = new URLSearchParams(body).get("payload") || "{}";
+        const payload = JSON.parse(payloadStr);
 
-  c.executionCtx.waitUntil(handleSlackInteraction(payload, c.env, traceId));
+        log.info("http.request", {
+          trace_id: traceId,
+          http_method: "POST",
+          http_path: "/interactions",
+          http_status: 200,
+          action_id: payload.actions?.[0]?.action_id,
+          duration_ms: Date.now() - startTime,
+        });
 
-  log.info("http.request", {
-    trace_id: traceId,
-    http_method: "POST",
-    http_path: "/interactions",
-    http_status: 200,
-    action_id: payload.actions?.[0]?.action_id,
-    duration_ms: Date.now() - startTime,
-  });
+        await handleSlackInteraction(payload, c.env, traceId);
+      } catch (error) {
+        log.error("http.request", {
+          trace_id: traceId,
+          http_method: "POST",
+          http_path: "/interactions",
+          http_status: 200,
+          outcome: "error",
+          error: error instanceof Error ? error : new Error(String(error)),
+          duration_ms: Date.now() - startTime,
+        });
+      }
+    })()
+  );
 
-  return c.json({ ok: true });
+  // Slack block actions only need an immediate 200 acknowledgement.
+  return new Response(null, { status: 200 });
 });
 
 // Mount callbacks router for control-plane notifications

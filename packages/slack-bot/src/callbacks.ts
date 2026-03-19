@@ -3,13 +3,55 @@
  */
 
 import { Hono } from "hono";
-import type { Env, CompletionCallback } from "./types";
+import type { Env, CompletionCallback, AgentResponse, SlackCallbackContext } from "./types";
 import { extractAgentResponse } from "./completion/extractor";
 import { buildCompletionBlocks, getFallbackText } from "./completion/blocks";
 import { postMessage, removeReaction } from "./utils/slack-client";
 import { createLogger } from "./logger";
 
 const log = createLogger("callback");
+
+async function postCompletionMessage(
+  env: Env,
+  sessionId: string,
+  agentResponse: AgentResponse,
+  context: SlackCallbackContext,
+  traceId?: string
+): Promise<{ ok: boolean; mode: "rich" | "fallback"; error?: string }> {
+  const richResult = await postMessage(
+    env.SLACK_BOT_TOKEN,
+    context.channel,
+    getFallbackText(agentResponse),
+    {
+      thread_ts: context.threadTs,
+      blocks: buildCompletionBlocks(sessionId, agentResponse, context, env.WEB_APP_URL),
+    }
+  );
+
+  if (richResult.ok) {
+    return { ok: true, mode: "rich" };
+  }
+
+  log.warn("slack.post.completion.rich_failed", {
+    trace_id: traceId,
+    channel: context.channel,
+    thread_ts: context.threadTs,
+    session_id: sessionId,
+    slack_error: richResult.error,
+  });
+
+  const fallbackText =
+    getFallbackText(agentResponse) + `\n\nView session: ${env.WEB_APP_URL}/session/${sessionId}`;
+  const fallbackResult = await postMessage(env.SLACK_BOT_TOKEN, context.channel, fallbackText, {
+    thread_ts: context.threadTs,
+  });
+
+  if (fallbackResult.ok) {
+    return { ok: true, mode: "fallback" };
+  }
+
+  return { ok: false, mode: "fallback", error: fallbackResult.error ?? richResult.error };
+}
 
 async function clearThinkingReaction(
   env: Env,
@@ -213,13 +255,24 @@ async function handleCompletionCallback(
       return;
     }
 
-    // Build and post completion message
-    const blocks = buildCompletionBlocks(sessionId, agentResponse, context, env.WEB_APP_URL);
+    const postResult = await postCompletionMessage(
+      env,
+      sessionId,
+      agentResponse,
+      context,
+      traceId
+    );
 
-    await postMessage(env.SLACK_BOT_TOKEN, context.channel, getFallbackText(agentResponse), {
-      thread_ts: context.threadTs,
-      blocks,
-    });
+    if (!postResult.ok) {
+      log.error("callback.complete", {
+        ...base,
+        outcome: "error",
+        error_message: "slack_post_failed",
+        slack_error: postResult.error,
+        duration_ms: Date.now() - startTime,
+      });
+      return;
+    }
 
     if (context.reactionMessageTs) {
       await clearThinkingReaction(env, context.channel, context.reactionMessageTs, traceId);
@@ -232,6 +285,7 @@ async function handleCompletionCallback(
       tool_call_count: agentResponse.toolCalls.length,
       artifact_count: agentResponse.artifacts.length,
       has_text: Boolean(agentResponse.textContent),
+      post_mode: postResult.mode,
       duration_ms: Date.now() - startTime,
     });
   } catch (error) {

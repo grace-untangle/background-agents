@@ -85,11 +85,15 @@ module "control_plane_worker" {
 
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
-  migration_tag       = "v2"
-  migration_old_tag   = "v1"
-  new_sqlite_classes  = ["SchedulerDO"]
+  # Fresh deployments should create both DO classes with no prior migration tag.
+  # After the initial deploy, bindings are added in phase 2 without migrations.
+  migration_tag       = "v1"
+  migration_old_tag   = ""
+  new_sqlite_classes  = []
 
-  cron_triggers = ["* * * * *"]
+  # Temporary: leave scheduler cron off until the initial control-plane deployment
+  # is stable. The cron can be added back in a follow-up apply.
+  cron_triggers = []
 
   depends_on = [null_resource.control_plane_build, module.session_index_kv, null_resource.d1_migrations, module.linear_bot_worker]
 }

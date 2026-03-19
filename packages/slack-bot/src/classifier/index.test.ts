@@ -59,6 +59,7 @@ const TEST_REPOS: RepoConfig[] = [
 const TEST_ENV = {
   ANTHROPIC_API_KEY: "test-api-key",
   CLASSIFICATION_MODEL: "claude-haiku-4-5",
+  DEPLOYMENT_NAME: "untangle",
 } as Env;
 
 describe("RepoClassifier", () => {
@@ -149,5 +150,31 @@ describe("RepoClassifier", () => {
     expect(result.needsClarification).toBe(true);
     expect(result.reasoning).toContain("structured model output");
     expect(result.alternatives).toHaveLength(2);
+  });
+
+  it("defaults to the deployment repo when there are exactly two repos", async () => {
+    const classifier = new RepoClassifier({
+      ...TEST_ENV,
+      DEPLOYMENT_NAME: "prod",
+    } as Env);
+    const result = await classifier.classify("what version of node are we using?");
+
+    expect(result.repo?.fullName).toBe("acme/prod");
+    expect(result.confidence).toBe("high");
+    expect(result.needsClarification).toBe(false);
+    expect(mockMessagesCreate).not.toHaveBeenCalled();
+  });
+
+  it("still selects the alternate repo when it is explicitly mentioned", async () => {
+    const classifier = new RepoClassifier({
+      ...TEST_ENV,
+      DEPLOYMENT_NAME: "prod",
+    } as Env);
+    const result = await classifier.classify("please update open-inspect web UI in acme/web");
+
+    expect(result.repo?.fullName).toBe("acme/web");
+    expect(result.confidence).toBe("high");
+    expect(result.needsClarification).toBe(false);
+    expect(mockMessagesCreate).not.toHaveBeenCalled();
   });
 });
