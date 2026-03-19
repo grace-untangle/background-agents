@@ -303,6 +303,7 @@ async function handleNewSession(
       issue.description,
       labelNames,
       projectInfo?.name,
+      issue.team?.name ?? issueDetails?.team?.name,
       traceId
     );
 

@@ -31,6 +31,36 @@ interface AnthropicResponse {
   content: AnthropicContentBlock[];
 }
 
+function normalizeIdentifier(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function sanitizeClassifierText(value: string | null | undefined): string {
+  if (!value) return "";
+
+  return value
+    .replace(/@openinspect\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function findTeamNamedRepo(
+  repos: RepoConfig[],
+  teamName: string | null | undefined
+): RepoConfig | null {
+  if (!teamName) return null;
+
+  const normalizedTeam = normalizeIdentifier(teamName);
+  if (!normalizedTeam) return null;
+
+  const exactMatches = repos.filter((repo) => normalizeIdentifier(repo.name) === normalizedTeam);
+  if (exactMatches.length === 1) {
+    return exactMatches[0];
+  }
+
+  return null;
+}
+
 /**
  * Build classification prompt from Linear issue context.
  */
@@ -40,13 +70,17 @@ async function buildClassificationPrompt(
   issueDescription: string | null | undefined,
   labels: string[],
   projectName: string | null | undefined,
+  teamName: string | null | undefined,
   traceId?: string
 ): Promise<string> {
   const repoDescriptions = await buildRepoDescriptions(env, traceId);
+  const sanitizedTitle = sanitizeClassifierText(issueTitle);
+  const sanitizedDescription = sanitizeClassifierText(issueDescription);
 
   let contextSection = "";
   if (labels.length > 0) contextSection += `\n**Labels**: ${labels.join(", ")}`;
   if (projectName) contextSection += `\n**Project**: ${projectName}`;
+  if (teamName) contextSection += `\n**Team**: ${teamName}`;
 
   return `You are a repository classifier for a coding agent. Your job is to determine which code repository a Linear issue belongs to.
 
@@ -54,8 +88,8 @@ async function buildClassificationPrompt(
 ${repoDescriptions}
 
 ## Issue
-**Title**: ${issueTitle}
-${issueDescription ? `**Description**: ${issueDescription}` : ""}
+**Title**: ${sanitizedTitle}
+${sanitizedDescription ? `**Description**: ${sanitizedDescription}` : ""}
 ${contextSection}
 
 ## Your Task
@@ -153,6 +187,7 @@ export async function classifyRepo(
   issueDescription: string | null | undefined,
   labels: string[],
   projectName: string | null | undefined,
+  teamName: string | null | undefined,
   traceId?: string
 ): Promise<ClassificationResult> {
   const repos = await getAvailableRepos(env, traceId);
@@ -175,6 +210,16 @@ export async function classifyRepo(
     };
   }
 
+  const teamNamedRepo = findTeamNamedRepo(repos, teamName);
+  if (teamNamedRepo) {
+    return {
+      repo: teamNamedRepo,
+      confidence: "high",
+      reasoning: `Linear team "${teamName}" matches repository "${teamNamedRepo.fullName}".`,
+      needsClarification: false,
+    };
+  }
+
   try {
     const prompt = await buildClassificationPrompt(
       env,
@@ -182,6 +227,7 @@ export async function classifyRepo(
       issueDescription,
       labels,
       projectName,
+      teamName,
       traceId
     );
 
