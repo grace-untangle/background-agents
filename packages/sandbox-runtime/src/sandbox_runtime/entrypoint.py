@@ -92,7 +92,8 @@ class SandboxSupervisor:
     @property
     def base_branch(self) -> str:
         """The branch to clone/fetch — defaults to 'main'."""
-        return self.session_config.get("branch", "main")
+        branch = self.session_config.get("branch")
+        return branch if branch else "main"
 
     def _build_repo_url(self, authenticated: bool = True) -> str:
         """Build the HTTPS URL for the repository, optionally with clone credentials."""

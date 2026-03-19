@@ -171,6 +171,52 @@ function extractStructuredResponse(response: Anthropic.Messages.Message): LLMRes
   return normalizeModelResponse(toolUseBlock.input);
 }
 
+function selectDeploymentDefaultRepo(
+  repos: RepoConfig[],
+  message: string,
+  deploymentName?: string
+): ClassificationResult | null {
+  if (!deploymentName) return null;
+
+  const normalizedDeploymentName = deploymentName.trim().toLowerCase();
+  if (!normalizedDeploymentName) return null;
+
+  const defaultRepo = repos.find((repo) => repo.name.toLowerCase() === normalizedDeploymentName);
+  if (!defaultRepo) return null;
+
+  if (repos.length !== 2) return null;
+
+  const alternateRepo = repos.find((repo) => repo.id !== defaultRepo.id);
+  if (!alternateRepo) return null;
+
+  const normalizedMessage = message.toLowerCase();
+  const alternateSignals = [
+    alternateRepo.id,
+    alternateRepo.fullName,
+    alternateRepo.name,
+    alternateRepo.displayName,
+    ...(alternateRepo.aliases || []),
+  ]
+    .filter(Boolean)
+    .map((value) => value.toLowerCase());
+
+  if (alternateSignals.some((signal) => normalizedMessage.includes(signal))) {
+    return {
+      repo: alternateRepo,
+      confidence: "high",
+      reasoning: `Message explicitly references ${alternateRepo.fullName}.`,
+      needsClarification: false,
+    };
+  }
+
+  return {
+    repo: defaultRepo,
+    confidence: "high",
+    reasoning: `Defaulting to ${defaultRepo.fullName} for this deployment.`,
+    needsClarification: false,
+  };
+}
+
 /**
  * Repository classifier class.
  */
@@ -214,6 +260,15 @@ export class RepoClassifier {
         reasoning: "Only one repository is available.",
         needsClarification: false,
       };
+    }
+
+    const defaultRepoResult = selectDeploymentDefaultRepo(
+      repos,
+      message,
+      this.env.DEPLOYMENT_NAME
+    );
+    if (defaultRepoResult) {
+      return defaultRepoResult;
     }
 
     // Check for channel-specific repos first

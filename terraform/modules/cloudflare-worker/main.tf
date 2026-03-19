@@ -95,11 +95,13 @@ resource "cloudflare_worker_version" "this" {
   # Note: Free plans require new_sqlite_classes instead of new_classes
   # When new_sqlite_classes is set, only those classes are declared as new (incremental migration).
   # When empty, all DO classes are declared as new (fresh deployment).
-  migrations = length(var.durable_objects) > 0 && !var.enable_durable_object_bindings ? {
-    old_tag            = var.migration_old_tag
-    new_tag            = var.migration_tag
-    new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : [for do in var.durable_objects : do.class_name]
-  } : null
+  migrations = length(var.durable_objects) > 0 && !var.enable_durable_object_bindings ? merge(
+    {
+      new_tag            = var.migration_tag
+      new_sqlite_classes = length(var.new_sqlite_classes) > 0 ? var.new_sqlite_classes : [for do in var.durable_objects : do.class_name]
+    },
+    var.migration_old_tag != null ? { old_tag = var.migration_old_tag } : {}
+  ) : null
 }
 
 # =============================================================================
