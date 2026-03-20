@@ -19,6 +19,8 @@ export interface GitHubBotSettings {
   allowedTriggerUsers?: string[];
   codeReviewInstructions?: string;
   commentActionInstructions?: string;
+  lowRiskFileAllowGlobs?: string[];
+  lowRiskFileBlockGlobs?: string[];
 }
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */

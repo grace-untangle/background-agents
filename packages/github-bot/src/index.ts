@@ -10,8 +10,11 @@ import type {
   Env,
   PullRequestOpenedPayload,
   ReviewRequestedPayload,
+  PullRequestReviewPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
+  CheckRunPayload,
+  CheckSuitePayload,
 } from "./types";
 import type { Logger } from "./logger";
 import { createLogger, parseLogLevel } from "./logger";
@@ -21,6 +24,9 @@ import {
   handleReviewRequested,
   handleIssueComment,
   handleReviewComment,
+  handlePullRequestReview,
+  handleCheckRunEvent,
+  handleCheckSuiteEvent,
   type HandlerResult,
 } from "./handlers";
 
@@ -178,8 +184,8 @@ async function handleWebhook(
   if (result.outcome === "skipped") {
     wideEvent.skip_reason = result.skip_reason;
   } else {
-    wideEvent.session_id = result.session_id;
-    wideEvent.message_id = result.message_id;
+    if (result.session_id) wideEvent.session_id = result.session_id;
+    if (result.message_id) wideEvent.message_id = result.message_id;
     wideEvent.handler_action = result.handler_action;
   }
   log.info("webhook.handled", wideEvent);
@@ -221,6 +227,18 @@ function dispatchHandler(
         outcome: "skipped",
         skip_reason: "unsupported_action",
       });
+    case "pull_request_review":
+      if (p.action === "submitted" || p.action === "dismissed") {
+        return handlePullRequestReview(env, log, payload as PullRequestReviewPayload, traceId);
+      }
+      return Promise.resolve({
+        outcome: "skipped",
+        skip_reason: "unsupported_action",
+      });
+    case "check_run":
+      return handleCheckRunEvent(env, log, payload as CheckRunPayload, traceId);
+    case "check_suite":
+      return handleCheckSuiteEvent(env, log, payload as CheckSuitePayload, traceId);
     default:
       return Promise.resolve({
         outcome: "skipped",

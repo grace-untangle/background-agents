@@ -15,6 +15,7 @@ export type {
   ArtifactType,
   Attachment,
   ClientMessage,
+  CallbackContext,
   CreateSessionRequest,
   CreateSessionResponse,
   EventType,

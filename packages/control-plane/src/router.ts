@@ -41,6 +41,7 @@ import { reposRoutes } from "./routes/repos";
 import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
 import { automationRoutes } from "./routes/automations";
+import { mergeQueueRoutes } from "./routes/merge-queue";
 
 const logger = createLogger("router");
 
@@ -475,6 +476,9 @@ const routes: Route[] = [
 
   // Automations
   ...automationRoutes,
+
+  // Merge queue coordination
+  ...mergeQueueRoutes,
 ];
 
 /**

@@ -71,6 +71,54 @@ export interface ReviewRequestedPayload {
   sender: { login: string };
 }
 
+export interface PullRequestReviewPayload {
+  action: "submitted" | "dismissed";
+  review: {
+    state: string;
+    body: string | null;
+    user: { login: string };
+  };
+  pull_request: {
+    number: number;
+    title: string;
+    body: string | null;
+    user: { login: string };
+    head: { ref: string; sha: string };
+    base: { ref: string };
+    labels?: Array<{ name: string }>;
+  };
+  repository: { owner: { login: string }; name: string; private: boolean };
+  sender: { login: string };
+}
+
+export interface CheckRunPayload {
+  action: string;
+  check_run: {
+    id: number;
+    name: string;
+    status: string;
+    conclusion: string | null;
+    pull_requests?: Array<{ number: number }>;
+    head_sha?: string;
+  };
+  repository: { owner: { login: string }; name: string; private: boolean };
+  sender: { login: string };
+}
+
+export interface CheckSuitePayload {
+  action: string;
+  check_suite: {
+    id: number;
+    status: string;
+    conclusion: string | null;
+    pull_requests?: Array<{ number: number }>;
+    head_sha?: string;
+    head_branch?: string | null;
+  };
+  repository: { owner: { login: string }; name: string; private: boolean };
+  sender: { login: string };
+}
+
 export interface IssueCommentPayload {
   action: "created";
   issue: {

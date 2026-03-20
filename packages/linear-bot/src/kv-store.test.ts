@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   getTeamRepoMapping,
   getProjectRepoMapping,
+  getProjectMergeReadyConfig,
   getTriggerConfig,
   getUserPreferences,
   lookupIssueSession,
+  getIssueProjectState,
+  storeIssueProjectState,
   storeIssueSession,
   isDuplicateEvent,
   DEFAULT_TRIGGER_CONFIG,
@@ -87,6 +90,19 @@ describe("getProjectRepoMapping", () => {
 
   it("returns {} when KV throws", async () => {
     expect(await getProjectRepoMapping(makeEnv(errorKv))).toEqual({});
+  });
+});
+
+describe("getProjectMergeReadyConfig", () => {
+  it("returns {} when KV has no data", async () => {
+    const { kv } = createFakeKV();
+    expect(await getProjectMergeReadyConfig(makeEnv(kv))).toEqual({});
+  });
+
+  it("returns parsed config from KV", async () => {
+    const config = { "proj-1": { mergeReadyStateName: "merging" } };
+    const { kv } = createFakeKV({ "config:project-merge-ready": JSON.stringify(config) });
+    expect(await getProjectMergeReadyConfig(makeEnv(kv))).toEqual(config);
   });
 });
 
@@ -193,6 +209,40 @@ describe("storeIssueSession", () => {
     const { kv, putCalls } = createFakeKV();
     await storeIssueSession(makeEnv(kv), "issue-1", session);
     expect(putCalls[0].options).toEqual({ expirationTtl: 86400 * 7 });
+  });
+});
+
+describe("issue project state helpers", () => {
+  it("stores and loads last-seen project state", async () => {
+    const { kv } = createFakeKV();
+    const env = makeEnv(kv);
+
+    await storeIssueProjectState(env, "issue-1", { id: "state-1", name: "merging" });
+
+    expect(await getIssueProjectState(env, "issue-1")).toEqual({
+      id: "state-1",
+      name: "merging",
+    });
+  });
+
+  it("supports legacy raw string state IDs", async () => {
+    const { kv } = createFakeKV({ "issue-project-state:issue-1": "state-1" });
+
+    expect(await getIssueProjectState(makeEnv(kv), "issue-1")).toEqual({
+      id: "state-1",
+      name: null,
+    });
+  });
+
+  it("deletes the stored state when null is passed", async () => {
+    const { kv } = createFakeKV({
+      "issue-project-state:issue-1": JSON.stringify({ id: "state-1", name: "merging" }),
+    });
+    const env = makeEnv(kv);
+
+    await storeIssueProjectState(env, "issue-1", null);
+
+    expect(await getIssueProjectState(env, "issue-1")).toBeNull();
   });
 });
 

@@ -6,7 +6,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env, UserPreferences, AgentSessionWebhook } from "./types";
+import type { Env, UserPreferences, AgentSessionWebhook, IssueUpdateWebhook } from "./types";
 import {
   buildOAuthAuthorizeUrl,
   exchangeCodeForToken,
@@ -15,10 +15,11 @@ import {
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
 import { verifyInternalToken } from "@open-inspect/shared";
-import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
+import { handleAgentSessionEvent, handleIssueUpdateEvent, escapeHtml } from "./webhook-handler";
 import {
   getTeamRepoMapping,
   getProjectRepoMapping,
+  getProjectMergeReadyConfig,
   getTriggerConfig,
   getUserPreferences,
   isDuplicateEvent,
@@ -55,6 +56,24 @@ function isAgentSessionWebhookPayload(payload: unknown): payload is AgentSession
   }
 
   return typeof agentSession.id === "string";
+}
+
+function isIssueUpdateWebhookPayload(payload: unknown): payload is IssueUpdateWebhook {
+  if (!isObjectRecord(payload)) return false;
+  if (
+    readStringField(payload, "type") !== "Issue" ||
+    readStringField(payload, "action") !== "update"
+  ) {
+    return false;
+  }
+
+  const organizationId = readStringField(payload, "organizationId");
+  const data = payload.data;
+  if (!organizationId || !isObjectRecord(data)) {
+    return false;
+  }
+
+  return typeof data.id === "string" && typeof data.identifier === "string";
 }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
@@ -169,6 +188,28 @@ app.post("/webhook", async (c) => {
     return c.json({ ok: true });
   }
 
+  if (eventType === "Issue" && action === "update") {
+    if (!isIssueUpdateWebhookPayload(payload)) {
+      log.warn("webhook.invalid_payload", {
+        trace_id: traceId,
+        reason: "invalid_issue_update_shape",
+      });
+      return c.json({ error: "Invalid payload" }, 400);
+    }
+
+    c.executionCtx.waitUntil(handleIssueUpdateEvent(payload, c.env, traceId));
+
+    log.info("http.request", {
+      trace_id: traceId,
+      http_path: "/webhook",
+      http_status: 200,
+      type: eventType,
+      action,
+      duration_ms: Date.now() - startTime,
+    });
+    return c.json({ ok: true });
+  }
+
   log.debug("webhook.skipped", { trace_id: traceId, type: eventType, action });
   return c.json({ ok: true, skipped: true, reason: `unhandled event type: ${eventType}` });
 });
@@ -212,6 +253,16 @@ app.get("/config/project-repos", async (c) => {
 app.put("/config/project-repos", async (c) => {
   const body = await c.req.json();
   await c.env.LINEAR_KV.put("config:project-repos", JSON.stringify(body));
+  return c.json({ ok: true });
+});
+
+app.get("/config/project-merge-ready", async (c) => {
+  return c.json(await getProjectMergeReadyConfig(c.env));
+});
+
+app.put("/config/project-merge-ready", async (c) => {
+  const body = await c.req.json();
+  await c.env.LINEAR_KV.put("config:project-merge-ready", JSON.stringify(body));
   return c.json({ ok: true });
 });
 

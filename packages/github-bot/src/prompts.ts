@@ -166,3 +166,98 @@ ${buildUntrustedUserContentBlock({
 ${buildCustomInstructionsSection(commentActionInstructions)}
 ${buildCommentGuidelines(isPublic)}`;
 }
+
+export function buildRemediationPrompt(params: {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  reviewBody: string | null;
+  base: string;
+  head: string;
+  failingChecks: string[];
+  inlineComments: Array<{ path: string; body: string }>;
+  isPublic: boolean;
+}): string {
+  const inlineCommentBlock =
+    params.inlineComments.length > 0
+      ? params.inlineComments.map((comment) => `- \`${comment.path}\`: ${comment.body}`).join("\n")
+      : "- None";
+  const failingChecksBlock =
+    params.failingChecks.length > 0
+      ? params.failingChecks.map((name) => `- ${name}`).join("\n")
+      : "- None";
+
+  return `You are remediating Pull Request #${params.number} in ${params.owner}/${params.repo}.
+The repository has been cloned and you must work on the existing PR head branch \`${params.head}\`.
+
+## PR Details
+- **Title**: ${params.title}
+- **Branch**: ${params.base} <- ${params.head}
+
+## Required first step
+Before editing anything, fetch fresh PR state from GitHub with \`gh\`:
+- \`gh pr view ${params.number} --json number,title,body,headRefName,headRefOid,baseRefName,reviewDecision,mergeable\`
+- \`gh pr view ${params.number} --comments\`
+- \`gh pr diff ${params.number}\`
+
+## Bot review requesting changes
+${params.reviewBody ?? "_No review summary provided._"}
+
+## Bot inline comments
+${inlineCommentBlock}
+
+## Failing checks
+${failingChecksBlock}
+
+## Instructions
+1. Fix the issues raised by the bot review
+2. Stay on the existing branch \`${params.head}\`
+3. Run the relevant validation for the changes
+4. Push the updated branch when complete
+5. Do not open a new PR
+6. Post a summary comment on the PR when done:
+
+   gh api repos/${params.owner}/${params.repo}/issues/${params.number}/comments \\
+     --method POST \\
+     -f body="<summary of the remediation you completed>"
+
+${buildCommentGuidelines(params.isPublic)}`;
+}
+
+export function buildMergePrepPrompt(params: {
+  owner: string;
+  repo: string;
+  number: number;
+  issueIdentifier: string;
+  base: string;
+  head: string;
+  isPublic: boolean;
+}): string {
+  return `You are preparing Pull Request #${params.number} in ${params.owner}/${params.repo} for merge.
+The repository has been cloned and you must work on the existing PR head branch \`${params.head}\`.
+
+This merge-prep run was authorized by Linear issue ${params.issueIdentifier} moving into the configured merge-ready column.
+
+## Required first step
+Before editing anything, fetch fresh PR state from GitHub with \`gh\`:
+- \`gh pr view ${params.number} --json number,title,body,headRefName,headRefOid,baseRefName,reviewDecision,mergeable\`
+- \`gh pr view ${params.number} --comments\`
+- \`gh pr diff ${params.number}\`
+
+## Fixed behavior
+1. Fetch the latest \`${params.base}\`
+2. Merge \`${params.base}\` into \`${params.head}\`
+3. Never rebase
+4. Resolve conflicts if needed
+5. Run the repo's required validation
+6. Push the updated \`${params.head}\` branch
+7. Do not merge the PR
+8. Post a summary comment on the PR when done:
+
+   gh api repos/${params.owner}/${params.repo}/issues/${params.number}/comments \\
+     --method POST \\
+     -f body="<summary of the merge prep you completed>"
+
+${buildCommentGuidelines(params.isPublic)}`;
+}

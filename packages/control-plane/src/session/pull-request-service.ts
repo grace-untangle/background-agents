@@ -1,4 +1,9 @@
-import { generateBranchName } from "@open-inspect/shared";
+import {
+  buildPrProvenanceComment,
+  generateBranchName,
+  OPEN_INSPECT_PR_LABEL,
+  type LinearPrProvenance,
+} from "@open-inspect/shared";
 import type { Logger } from "../logger";
 import { resolveHeadBranchForPr } from "../source-control/branch-resolution";
 import {
@@ -18,6 +23,7 @@ export interface CreatePullRequestInput {
   body: string;
   baseBranch?: string;
   headBranch?: string;
+  provenance?: LinearPrProvenance | null;
   promptingUserId: string;
   promptingAuth: SourceControlAuthContext | null;
   sessionUrl: string;
@@ -173,7 +179,13 @@ export class SessionPullRequestService {
       // (e.g. sessions triggered from Linear or other integrations without user GitHub OAuth)
       const prAuth = input.promptingAuth ?? appAuth;
 
-      const fullBody = input.body + `\n\n---\n*Created with [Open-Inspect](${input.sessionUrl})*`;
+      const provenanceBlock = input.provenance
+        ? `\n\n${buildPrProvenanceComment(input.provenance)}`
+        : "";
+      const fullBody =
+        input.body +
+        provenanceBlock +
+        `\n\n---\n*Created with [Open-Inspect](${input.sessionUrl})*`;
 
       const prResult = await this.deps.sourceControlProvider.createPullRequest(prAuth, {
         repository: repoInfo,
@@ -181,6 +193,7 @@ export class SessionPullRequestService {
         body: fullBody,
         sourceBranch: headBranch,
         targetBranch: baseBranch,
+        labels: input.provenance ? [OPEN_INSPECT_PR_LABEL] : undefined,
       });
 
       const artifactId = this.deps.generateId();
@@ -194,6 +207,7 @@ export class SessionPullRequestService {
           state: prResult.state,
           head: headBranch,
           base: baseBranch,
+          provenance: input.provenance ?? null,
         }),
         createdAt: now,
       });

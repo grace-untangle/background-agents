@@ -45,6 +45,7 @@ import type {
   SessionState,
   SessionStatus,
   SandboxStatus,
+  CallbackContext,
 } from "../types";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
@@ -429,6 +430,23 @@ export class SessionDO extends DurableObject<Env> {
       this._pullRequestHandler = createPullRequestHandler({
         getSession: () => this.getSession(),
         getPromptingParticipantForPR: () => this.participantService.getPromptingParticipantForPR(),
+        getPromptingMessageCallbackContext: () => {
+          const processingMessage = this.repository.getProcessingMessage();
+          if (!processingMessage) {
+            return null;
+          }
+
+          const message = this.repository.getMessageCallbackContext(processingMessage.id);
+          if (!message?.callback_context) {
+            return null;
+          }
+
+          try {
+            return JSON.parse(message.callback_context) as CallbackContext;
+          } catch {
+            return null;
+          }
+        },
         resolveAuthForPR: (participant) => this.participantService.resolveAuthForPR(participant),
         getSessionUrl: (session) => {
           const sessionId = session.session_name || session.id;

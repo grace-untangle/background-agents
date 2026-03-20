@@ -1,3 +1,4 @@
+import type { CallbackContext } from "@open-inspect/shared";
 import type { SourceControlAuthContext } from "../../../source-control";
 import type { CreatePullRequestInput, CreatePullRequestResult } from "../../pull-request-service";
 import type { ParticipantRow, SessionRow } from "../../types";
@@ -20,6 +21,7 @@ type ResolveAuthForPrResult =
 export interface PullRequestHandlerDeps {
   getSession: () => SessionRow | null;
   getPromptingParticipantForPR: () => Promise<PromptingParticipantResult>;
+  getPromptingMessageCallbackContext: () => CallbackContext | null;
   resolveAuthForPR: (participant: ParticipantRow) => Promise<ResolveAuthForPrResult>;
   getSessionUrl: (session: SessionRow) => string;
   createPullRequest: (input: CreatePullRequestInput) => Promise<CreatePullRequestResult>;
@@ -53,9 +55,23 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         return Response.json({ error: authResolution.error }, { status: authResolution.status });
       }
 
+      const callbackContext = deps.getPromptingMessageCallbackContext();
+      const provenance =
+        callbackContext?.source === "linear" && callbackContext.organizationId
+          ? {
+              source: "linear" as const,
+              issueId: callbackContext.issueId,
+              issueIdentifier: callbackContext.issueIdentifier,
+              organizationId: callbackContext.organizationId,
+              sessionId: session.session_name || session.id,
+              agentSessionId: callbackContext.agentSessionId,
+            }
+          : null;
+
       const result = await deps.createPullRequest({
         ...body,
         baseBranch: body.baseBranch || session.base_branch,
+        provenance,
         promptingUserId: promptingParticipant.user_id,
         promptingAuth: authResolution.auth,
         sessionUrl: deps.getSessionUrl(session),

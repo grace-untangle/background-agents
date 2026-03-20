@@ -1,3 +1,4 @@
+import { buildPrProvenanceComment, OPEN_INSPECT_PR_LABEL } from "@open-inspect/shared";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
@@ -85,6 +86,7 @@ function createInput(overrides: Partial<CreatePullRequestInput> = {}): CreatePul
   return {
     title: "Test PR",
     body: "Body text",
+    provenance: null,
     promptingUserId: "user-1",
     promptingAuth: null,
     sessionUrl: "https://app.example.com/session/session-name-1",
@@ -231,6 +233,35 @@ describe("SessionPullRequestService", () => {
       url: "https://github.com/acme/web/pull/42",
       prNumber: 42,
     });
+  });
+
+  it("adds provenance comment and open-inspect label for Linear PRs", async () => {
+    await harness.service.createPullRequest(
+      createInput({
+        provenance: {
+          source: "linear",
+          issueId: "issue-123",
+          issueIdentifier: "LIN-123",
+          organizationId: "org-1",
+          sessionId: "session-name-1",
+          agentSessionId: "agent-session-1",
+        },
+      })
+    );
+
+    const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(createPrCall[1].body).toContain(
+      buildPrProvenanceComment({
+        source: "linear",
+        issueId: "issue-123",
+        issueIdentifier: "LIN-123",
+        organizationId: "org-1",
+        sessionId: "session-name-1",
+        agentSessionId: "agent-session-1",
+      })
+    );
+    expect(createPrCall[1].labels).toEqual([OPEN_INSPECT_PR_LABEL]);
   });
 
   it("ignores prior manual branch artifact and creates PR", async () => {

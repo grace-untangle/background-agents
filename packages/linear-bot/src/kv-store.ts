@@ -7,6 +7,8 @@ import type {
   TriggerConfig,
   TeamRepoMapping,
   ProjectRepoMapping,
+  ProjectMergeReadyConfig,
+  IssueProjectStateSnapshot,
   UserPreferences,
   IssueSession,
 } from "./types";
@@ -38,6 +40,18 @@ export async function getProjectRepoMapping(env: Env): Promise<ProjectRepoMappin
     if (data && typeof data === "object") return data as ProjectRepoMapping;
   } catch (e) {
     log.debug("kv.get_project_repo_mapping_failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  return {};
+}
+
+export async function getProjectMergeReadyConfig(env: Env): Promise<ProjectMergeReadyConfig> {
+  try {
+    const data = await env.LINEAR_KV.get("config:project-merge-ready", "json");
+    if (data && typeof data === "object") return data as ProjectMergeReadyConfig;
+  } catch (e) {
+    log.debug("kv.get_project_merge_ready_config_failed", {
       error: e instanceof Error ? e.message : String(e),
     });
   }
@@ -99,6 +113,61 @@ export async function storeIssueSession(
   await env.LINEAR_KV.put(getIssueSessionKey(issueId), JSON.stringify(session), {
     expirationTtl: 86400 * 7,
   });
+}
+
+function getIssueProjectStateKey(issueId: string): string {
+  return `issue-project-state:${issueId}`;
+}
+
+export async function getIssueProjectState(
+  env: Env,
+  issueId: string
+): Promise<IssueProjectStateSnapshot | null> {
+  try {
+    const raw = await env.LINEAR_KV.get(getIssueProjectStateKey(issueId));
+    if (!raw) return null;
+
+    try {
+      const parsed = JSON.parse(raw) as Partial<IssueProjectStateSnapshot>;
+      if (typeof parsed === "object" && parsed !== null) {
+        return {
+          id: typeof parsed.id === "string" && parsed.id.length > 0 ? parsed.id : null,
+          name: typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : null,
+        };
+      }
+    } catch {
+      // Backward compatibility for previously stored string-only IDs.
+      return { id: raw, name: null };
+    }
+  } catch (e) {
+    log.debug("kv.get_issue_project_state_failed", {
+      issueId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  return null;
+}
+
+export async function storeIssueProjectState(
+  env: Env,
+  issueId: string,
+  projectState: IssueProjectStateSnapshot | null
+): Promise<void> {
+  if (!projectState?.id && !projectState?.name) {
+    await env.LINEAR_KV.delete(getIssueProjectStateKey(issueId));
+    return;
+  }
+
+  await env.LINEAR_KV.put(
+    getIssueProjectStateKey(issueId),
+    JSON.stringify({
+      id: projectState.id ?? null,
+      name: projectState.name ?? null,
+    }),
+    {
+      expirationTtl: 86400 * 30,
+    }
+  );
 }
 
 /**

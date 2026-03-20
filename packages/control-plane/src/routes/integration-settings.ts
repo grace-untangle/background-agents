@@ -311,6 +311,8 @@ async function handleGetResolvedConfig(
         allowedTriggerUsers: githubSettings.allowedTriggerUsers ?? null,
         codeReviewInstructions: githubSettings.codeReviewInstructions ?? null,
         commentActionInstructions: githubSettings.commentActionInstructions ?? null,
+        lowRiskFileAllowGlobs: githubSettings.lowRiskFileAllowGlobs ?? null,
+        lowRiskFileBlockGlobs: githubSettings.lowRiskFileBlockGlobs ?? null,
       },
     });
   }

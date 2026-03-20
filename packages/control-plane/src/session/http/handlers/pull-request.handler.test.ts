@@ -50,6 +50,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
   const getPromptingParticipantForPR = vi.fn();
+  const getPromptingMessageCallbackContext = vi.fn();
   const resolveAuthForPR = vi.fn();
   const getSessionUrl = vi.fn();
   const createPullRequest = vi.fn();
@@ -57,6 +58,7 @@ function createHandler() {
   const handler = createPullRequestHandler({
     getSession,
     getPromptingParticipantForPR,
+    getPromptingMessageCallbackContext,
     resolveAuthForPR,
     getSessionUrl,
     createPullRequest,
@@ -66,6 +68,7 @@ function createHandler() {
     handler,
     getSession,
     getPromptingParticipantForPR,
+    getPromptingMessageCallbackContext,
     resolveAuthForPR,
     getSessionUrl,
     createPullRequest,
@@ -136,6 +139,7 @@ describe("createPullRequestHandler", () => {
       handler,
       getSession,
       getPromptingParticipantForPR,
+      getPromptingMessageCallbackContext,
       resolveAuthForPR,
       getSessionUrl,
       createPullRequest,
@@ -144,6 +148,7 @@ describe("createPullRequestHandler", () => {
     const participant = createParticipant({ user_id: "user-123" });
     getSession.mockReturnValue(session);
     getPromptingParticipantForPR.mockResolvedValue({ participant });
+    getPromptingMessageCallbackContext.mockReturnValue(null);
     resolveAuthForPR.mockResolvedValue({ auth: { authType: "oauth", token: "token" } });
     getSessionUrl.mockReturnValue("https://app.example.com/session/public-session-1");
     createPullRequest.mockResolvedValue({
@@ -167,6 +172,7 @@ describe("createPullRequestHandler", () => {
       body: "desc",
       headBranch: "feature/pr",
       baseBranch: "develop",
+      provenance: null,
       promptingUserId: "user-123",
       promptingAuth: { authType: "oauth", token: "token" },
       sessionUrl: "https://app.example.com/session/public-session-1",
@@ -178,6 +184,7 @@ describe("createPullRequestHandler", () => {
       handler,
       getSession,
       getPromptingParticipantForPR,
+      getPromptingMessageCallbackContext,
       resolveAuthForPR,
       getSessionUrl,
       createPullRequest,
@@ -186,6 +193,7 @@ describe("createPullRequestHandler", () => {
     const participant = createParticipant();
     getSession.mockReturnValue(session);
     getPromptingParticipantForPR.mockResolvedValue({ participant });
+    getPromptingMessageCallbackContext.mockReturnValue(null);
     resolveAuthForPR.mockResolvedValue({ auth: null });
     getSessionUrl.mockReturnValue("https://app.example.com/session/public-session-1");
     createPullRequest.mockResolvedValue({
@@ -219,9 +227,63 @@ describe("createPullRequestHandler", () => {
       body: "desc",
       baseBranch: "release",
       headBranch: "feature/pr",
+      provenance: null,
       promptingUserId: "user-1",
       promptingAuth: null,
       sessionUrl: "https://app.example.com/session/public-session-1",
     });
+  });
+
+  it("threads Linear provenance into PR creation", async () => {
+    const {
+      handler,
+      getSession,
+      getPromptingParticipantForPR,
+      getPromptingMessageCallbackContext,
+      resolveAuthForPR,
+      getSessionUrl,
+      createPullRequest,
+    } = createHandler();
+    getSession.mockReturnValue(createSession());
+    getPromptingParticipantForPR.mockResolvedValue({ participant: createParticipant() });
+    getPromptingMessageCallbackContext.mockReturnValue({
+      source: "linear",
+      issueId: "issue-123",
+      issueIdentifier: "LIN-123",
+      issueUrl: "https://linear.app/acme/issue/LIN-123",
+      repoFullName: "acme/repo",
+      model: "anthropic/claude-haiku-4-5",
+      organizationId: "org-1",
+      agentSessionId: "agent-session-1",
+    });
+    resolveAuthForPR.mockResolvedValue({ auth: null });
+    getSessionUrl.mockReturnValue("https://app.example.com/session/public-session-1");
+    createPullRequest.mockResolvedValue({
+      kind: "created",
+      prNumber: 42,
+      prUrl: "https://github.com/acme/repo/pull/42",
+      state: "open",
+    });
+
+    await handler.createPr(
+      new Request("http://internal/internal/create-pr", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "PR", body: "desc" }),
+      })
+    );
+
+    expect(createPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provenance: {
+          source: "linear",
+          issueId: "issue-123",
+          issueIdentifier: "LIN-123",
+          organizationId: "org-1",
+          sessionId: "public-session-1",
+          agentSessionId: "agent-session-1",
+        },
+      })
+    );
   });
 });

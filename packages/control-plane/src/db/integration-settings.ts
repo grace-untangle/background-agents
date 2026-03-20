@@ -220,6 +220,26 @@ export class IntegrationSettingsStore {
       throw new IntegrationSettingsValidationError("commentActionInstructions must be a string");
     }
 
+    if (
+      settings.lowRiskFileAllowGlobs !== undefined &&
+      (!Array.isArray(settings.lowRiskFileAllowGlobs) ||
+        !settings.lowRiskFileAllowGlobs.every((glob) => typeof glob === "string"))
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "lowRiskFileAllowGlobs must be an array of strings"
+      );
+    }
+
+    if (
+      settings.lowRiskFileBlockGlobs !== undefined &&
+      (!Array.isArray(settings.lowRiskFileBlockGlobs) ||
+        !settings.lowRiskFileBlockGlobs.every((glob) => typeof glob === "string"))
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "lowRiskFileBlockGlobs must be an array of strings"
+      );
+    }
+
     if (settings.allowedTriggerUsers !== undefined) {
       if (
         !Array.isArray(settings.allowedTriggerUsers) ||

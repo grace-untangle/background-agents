@@ -9,6 +9,9 @@ import type {
   LinearIssueDetails,
   AgentSessionWebhook,
   AgentSessionWebhookIssue,
+  IssueUpdateWebhook,
+  IssueProjectStateSnapshot,
+  ProjectMergeReadyConfig,
 } from "./types";
 import {
   getLinearClient,
@@ -31,8 +34,11 @@ import {
 import {
   getTeamRepoMapping,
   getProjectRepoMapping,
+  getProjectMergeReadyConfig,
   getUserPreferences,
+  getIssueProjectState,
   lookupIssueSession,
+  storeIssueProjectState,
   storeIssueSession,
 } from "./kv-store";
 
@@ -54,6 +60,139 @@ async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string
   }
   if (traceId) headers["x-trace-id"] = traceId;
   return headers;
+}
+
+function getCurrentProjectStateId(issue: IssueUpdateWebhook["data"]): string | null {
+  const directStateId =
+    issue.projectStateId ??
+    issue.projectStatusId ??
+    issue.stateId ??
+    issue.state?.id ??
+    issue.projectState?.id ??
+    null;
+  return typeof directStateId === "string" && directStateId.length > 0 ? directStateId : null;
+}
+
+function normalizeStateName(stateName: string | null | undefined): string | null {
+  if (typeof stateName !== "string") return null;
+  const normalized = stateName.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function getCurrentProjectStateName(issue: IssueUpdateWebhook["data"]): string | null {
+  return normalizeStateName(
+    issue.stateName ?? issue.state?.name ?? issue.projectState?.name ?? null
+  );
+}
+
+function getCurrentIssueProjectState(issue: IssueUpdateWebhook["data"]): IssueProjectStateSnapshot {
+  return {
+    id: getCurrentProjectStateId(issue),
+    name: getCurrentProjectStateName(issue),
+  };
+}
+
+function projectStatesEqual(
+  previousState: IssueProjectStateSnapshot | null,
+  currentState: IssueProjectStateSnapshot
+): boolean {
+  if (previousState?.id && currentState.id) {
+    return previousState.id === currentState.id;
+  }
+
+  if (previousState?.name && currentState.name) {
+    return normalizeStateName(previousState.name) === normalizeStateName(currentState.name);
+  }
+
+  return previousState?.id === currentState.id && previousState?.name === currentState.name;
+}
+
+function projectStateMatchesMergeReadyConfig(
+  currentState: IssueProjectStateSnapshot,
+  projectConfig: ProjectMergeReadyConfig[string]
+): boolean {
+  if (projectConfig.mergeReadyStateId && currentState.id === projectConfig.mergeReadyStateId) {
+    return true;
+  }
+
+  const configuredStateName = normalizeStateName(projectConfig.mergeReadyStateName);
+  if (configuredStateName && normalizeStateName(currentState.name) === configuredStateName) {
+    return true;
+  }
+
+  return false;
+}
+
+async function enrichIssueProjectState(
+  env: Env,
+  webhook: IssueUpdateWebhook,
+  currentState: IssueProjectStateSnapshot,
+  traceId: string
+): Promise<IssueProjectStateSnapshot> {
+  if (currentState.name) {
+    return currentState;
+  }
+
+  const client = await getLinearClient(env, webhook.organizationId);
+  if (!client) {
+    log.debug("issue_update.state_name_lookup_skipped", {
+      trace_id: traceId,
+      issue_id: webhook.data.id,
+      issue_identifier: webhook.data.identifier,
+      skip_reason: "no_linear_client",
+    });
+    return currentState;
+  }
+
+  const issueDetails = await fetchIssueDetails(client, webhook.data.id);
+  const resolvedStateName = normalizeStateName(issueDetails?.state?.name ?? null);
+  const resolvedStateId =
+    issueDetails?.state?.id && issueDetails.state.id.length > 0 ? issueDetails.state.id : null;
+
+  return {
+    id: currentState.id ?? resolvedStateId,
+    name: currentState.name ?? resolvedStateName,
+  };
+}
+
+function buildMergePrepPrompt(params: {
+  repoFullName: string;
+  issueIdentifier: string;
+  prNumber: number;
+  baseBranch: string;
+  headBranch: string;
+  reviewStatus: string;
+}): string {
+  const { repoFullName, issueIdentifier, prNumber, baseBranch, headBranch, reviewStatus } = params;
+
+  return `Prepare Pull Request #${prNumber} in ${repoFullName} for merge queue processing.
+
+This session was authorized by moving Linear issue ${issueIdentifier} into the configured merge-ready column.
+
+## Required first step
+Before editing anything, fetch fresh PR state from GitHub with \`gh\`:
+- \`gh pr view ${prNumber} --json number,title,body,headRefName,headRefOid,baseRefName,reviewDecision,mergeable\`
+- \`gh pr view ${prNumber} --comments\`
+- \`gh pr diff ${prNumber}\`
+
+## Fixed merge-prep behavior
+1. Work on the PR head branch \`${headBranch}\`
+2. Fetch the latest \`${baseBranch}\`
+3. Merge \`${baseBranch}\` into \`${headBranch}\` using a merge commit
+4. Never rebase
+5. Resolve conflicts if needed
+6. Run the repo's required validation
+7. Push the updated \`${headBranch}\` branch
+8. Do not merge the PR
+9. Leave the branch in a state where deterministic GitHub review and checks can rerun
+
+## Current known state
+- PR: #${prNumber}
+- Base branch: ${baseBranch}
+- Head branch: ${headBranch}
+- Existing bot review status: ${reviewStatus}
+
+When you're finished, summarize what changed and any remaining blockers.`;
 }
 
 // ─── Sub-handlers ────────────────────────────────────────────────────────────
@@ -563,6 +702,245 @@ export async function handleAgentSessionEvent(
 
   // New session
   return handleNewSession(webhook, issue, env, traceId);
+}
+
+export async function handleIssueUpdateEvent(
+  webhook: IssueUpdateWebhook,
+  env: Env,
+  traceId: string
+): Promise<void> {
+  const issue = webhook.data;
+  const projectId = issue.project?.id;
+  const mergeReadyConfig = await getProjectMergeReadyConfig(env);
+  const projectConfig = projectId ? mergeReadyConfig[projectId] : undefined;
+  const previousProjectState = await getIssueProjectState(env, issue.id);
+  let currentProjectState = getCurrentIssueProjectState(issue);
+
+  const requiresStateNameResolution = Boolean(
+    projectConfig?.mergeReadyStateName && !currentProjectState.name
+  );
+  if (requiresStateNameResolution) {
+    currentProjectState = await enrichIssueProjectState(env, webhook, currentProjectState, traceId);
+  }
+
+  await storeIssueProjectState(env, issue.id, currentProjectState);
+
+  if (!projectId || (!currentProjectState.id && !currentProjectState.name)) {
+    log.debug("issue_update.skipped", {
+      trace_id: traceId,
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      skip_reason: "missing_project_state",
+    });
+    return;
+  }
+
+  if (!projectConfig) {
+    log.debug("issue_update.skipped", {
+      trace_id: traceId,
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      project_id: projectId,
+      skip_reason: "project_not_merge_enabled",
+    });
+    return;
+  }
+
+  if (projectStatesEqual(previousProjectState, currentProjectState)) {
+    log.debug("issue_update.skipped", {
+      trace_id: traceId,
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      project_id: projectId,
+      project_state_id: currentProjectState.id,
+      project_state_name: currentProjectState.name,
+      skip_reason: "no_state_transition",
+    });
+    return;
+  }
+
+  if (!projectStateMatchesMergeReadyConfig(currentProjectState, projectConfig)) {
+    log.debug("issue_update.skipped", {
+      trace_id: traceId,
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      project_id: projectId,
+      previous_project_state_id: previousProjectState?.id,
+      previous_project_state_name: previousProjectState?.name,
+      current_project_state_id: currentProjectState.id,
+      current_project_state_name: currentProjectState.name,
+      merge_ready_state_id: projectConfig.mergeReadyStateId,
+      merge_ready_state_name: projectConfig.mergeReadyStateName,
+      skip_reason: "not_merge_ready_state",
+    });
+    return;
+  }
+
+  const issueSession = await lookupIssueSession(env, issue.id);
+  if (!issueSession) {
+    log.info("issue_update.skipped", {
+      trace_id: traceId,
+      issue_id: issue.id,
+      issue_identifier: issue.identifier,
+      project_id: projectId,
+      skip_reason: "no_issue_session",
+    });
+    return;
+  }
+
+  const headers = await getAuthHeaders(env, traceId);
+  const artifactsResponse = await env.CONTROL_PLANE.fetch(
+    `https://internal/sessions/${issueSession.sessionId}/artifacts`,
+    { method: "GET", headers }
+  );
+  if (!artifactsResponse.ok) {
+    log.warn("issue_update.artifacts_failed", {
+      trace_id: traceId,
+      session_id: issueSession.sessionId,
+      issue_identifier: issue.identifier,
+      http_status: artifactsResponse.status,
+    });
+    return;
+  }
+
+  const artifactsData = (await artifactsResponse.json()) as {
+    artifacts: Array<{
+      id: string;
+      type: string;
+      url: string | null;
+      metadata: Record<string, unknown> | null;
+    }>;
+  };
+  const prArtifact = artifactsData.artifacts.find((artifact) => artifact.type === "pr");
+  if (!prArtifact?.metadata) {
+    log.info("issue_update.skipped", {
+      trace_id: traceId,
+      issue_identifier: issue.identifier,
+      session_id: issueSession.sessionId,
+      skip_reason: "no_pr_artifact",
+    });
+    return;
+  }
+
+  const prNumber =
+    typeof prArtifact.metadata.number === "number" ? prArtifact.metadata.number : null;
+  const baseBranch = typeof prArtifact.metadata.base === "string" ? prArtifact.metadata.base : null;
+  const headBranch = typeof prArtifact.metadata.head === "string" ? prArtifact.metadata.head : null;
+  if (!prNumber || !baseBranch || !headBranch) {
+    log.warn("issue_update.skipped", {
+      trace_id: traceId,
+      issue_identifier: issue.identifier,
+      session_id: issueSession.sessionId,
+      skip_reason: "missing_pr_metadata",
+    });
+    return;
+  }
+
+  const queueResponse = await env.CONTROL_PLANE.fetch("https://internal/merge-queue/enqueue", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      repoOwner: issueSession.repoOwner,
+      repoName: issueSession.repoName,
+      baseBranch,
+      prNumber,
+      headBranch,
+      headSha: null,
+      linkedIssue: {
+        issueId: issue.id,
+        issueIdentifier: issue.identifier,
+        organizationId: webhook.organizationId,
+      },
+    }),
+  });
+  if (!queueResponse.ok) {
+    log.warn("issue_update.queue_enqueue_failed", {
+      trace_id: traceId,
+      issue_identifier: issue.identifier,
+      pr_number: prNumber,
+      http_status: queueResponse.status,
+    });
+    return;
+  }
+
+  const queueResult = (await queueResponse.json()) as {
+    activated: boolean;
+    item: {
+      repoOwner: string;
+      repoName: string;
+      prNumber: number;
+      baseBranch: string;
+      headBranch: string;
+    };
+  };
+  if (!queueResult.activated) {
+    log.info("issue_update.enqueued", {
+      trace_id: traceId,
+      issue_identifier: issue.identifier,
+      repo: `${issueSession.repoOwner}/${issueSession.repoName}`,
+      pr_number: prNumber,
+      queue_state: "queued",
+    });
+    return;
+  }
+
+  const repoFullName = `${issueSession.repoOwner}/${issueSession.repoName}`;
+  const integrationConfig = await getLinearConfig(env, repoFullName.toLowerCase());
+  const sessionCreateResponse = await env.CONTROL_PLANE.fetch("https://internal/sessions", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      repoOwner: issueSession.repoOwner,
+      repoName: issueSession.repoName,
+      branch: headBranch,
+      title: `${issue.identifier}: Merge prep for PR #${prNumber}`,
+      model: integrationConfig.model ?? env.DEFAULT_MODEL,
+      reasoningEffort: integrationConfig.reasoningEffort ?? undefined,
+      userId: "linear-merge-queue",
+      scmName: "Linear Merge Queue",
+    }),
+  });
+  if (!sessionCreateResponse.ok) {
+    log.warn("issue_update.merge_prep_session_create_failed", {
+      trace_id: traceId,
+      issue_identifier: issue.identifier,
+      pr_number: prNumber,
+      http_status: sessionCreateResponse.status,
+    });
+    return;
+  }
+
+  const mergePrepSession = (await sessionCreateResponse.json()) as { sessionId: string };
+  const prompt = buildMergePrepPrompt({
+    repoFullName,
+    issueIdentifier: issue.identifier,
+    prNumber,
+    baseBranch,
+    headBranch,
+    reviewStatus: "pending",
+  });
+  const promptResponse = await env.CONTROL_PLANE.fetch(
+    `https://internal/sessions/${mergePrepSession.sessionId}/prompt`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        content: prompt,
+        authorId: "linear:merge-queue",
+        source: "linear",
+      }),
+    }
+  );
+
+  log.info("issue_update.merge_prep_started", {
+    trace_id: traceId,
+    issue_identifier: issue.identifier,
+    repo: repoFullName,
+    pr_number: prNumber,
+    activated: true,
+    session_id: mergePrepSession.sessionId,
+    prompt_status: promptResponse.status,
+  });
 }
 
 // ─── Prompt Builder ──────────────────────────────────────────────────────────

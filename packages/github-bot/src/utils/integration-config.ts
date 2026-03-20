@@ -10,6 +10,8 @@ export interface ResolvedGitHubConfig {
   allowedTriggerUsers: string[] | null;
   codeReviewInstructions: string | null;
   commentActionInstructions: string | null;
+  lowRiskFileAllowGlobs: string[] | null;
+  lowRiskFileBlockGlobs: string[] | null;
 }
 
 const FAIL_CLOSED: Omit<ResolvedGitHubConfig, "model"> = {
@@ -19,6 +21,8 @@ const FAIL_CLOSED: Omit<ResolvedGitHubConfig, "model"> = {
   allowedTriggerUsers: [],
   codeReviewInstructions: null,
   commentActionInstructions: null,
+  lowRiskFileAllowGlobs: null,
+  lowRiskFileBlockGlobs: null,
 };
 
 export async function getGitHubConfig(
@@ -62,6 +66,8 @@ export async function getGitHubConfig(
       allowedTriggerUsers: string[] | null;
       codeReviewInstructions: string | null;
       commentActionInstructions: string | null;
+      lowRiskFileAllowGlobs: string[] | null;
+      lowRiskFileBlockGlobs: string[] | null;
     } | null;
   };
 
@@ -74,6 +80,8 @@ export async function getGitHubConfig(
       allowedTriggerUsers: null,
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      lowRiskFileAllowGlobs: null,
+      lowRiskFileBlockGlobs: null,
     };
   }
 
@@ -85,5 +93,7 @@ export async function getGitHubConfig(
     allowedTriggerUsers: data.config.allowedTriggerUsers,
     codeReviewInstructions: data.config.codeReviewInstructions,
     commentActionInstructions: data.config.commentActionInstructions,
+    lowRiskFileAllowGlobs: data.config.lowRiskFileAllowGlobs,
+    lowRiskFileBlockGlobs: data.config.lowRiskFileBlockGlobs,
   };
 }

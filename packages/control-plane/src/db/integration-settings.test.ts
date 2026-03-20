@@ -411,6 +411,17 @@ describe("IntegrationSettingsStore", () => {
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
+
+    it("accepts low-risk file glob arrays", async () => {
+      await store.setRepoSettings("github", "acme/widgets", {
+        lowRiskFileAllowGlobs: ["docs/**"],
+        lowRiskFileBlockGlobs: ["docs/private/**"],
+      });
+
+      const result = await store.getRepoSettings("github", "acme/widgets");
+      expect(result?.lowRiskFileAllowGlobs).toEqual(["docs/**"]);
+      expect(result?.lowRiskFileBlockGlobs).toEqual(["docs/private/**"]);
+    });
   });
 
   describe("merge logic (getResolvedConfig)", () => {
@@ -596,6 +607,19 @@ describe("IntegrationSettingsStore", () => {
 
       const config = await store.getResolvedConfig("github", "acme/widgets");
       expect(config.settings.commentActionInstructions).toBe("Repo comment instructions.");
+    });
+
+    it("surfaces low-risk file globs in resolved config", async () => {
+      await store.setGlobal("github", {
+        defaults: { lowRiskFileAllowGlobs: ["docs/**"] },
+      });
+      await store.setRepoSettings("github", "acme/widgets", {
+        lowRiskFileBlockGlobs: ["docs/private/**"],
+      });
+
+      const config = await store.getResolvedConfig("github", "acme/widgets");
+      expect(config.settings.lowRiskFileAllowGlobs).toEqual(["docs/**"]);
+      expect(config.settings.lowRiskFileBlockGlobs).toEqual(["docs/private/**"]);
     });
   });
 

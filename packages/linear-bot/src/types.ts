@@ -85,6 +85,18 @@ export interface ProjectRepoMapping {
   [projectId: string]: { owner: string; name: string };
 }
 
+export interface ProjectMergeReadyConfig {
+  [projectId: string]: {
+    mergeReadyStateId?: string;
+    mergeReadyStateName?: string;
+  };
+}
+
+export interface IssueProjectStateSnapshot {
+  id: string | null;
+  name: string | null;
+}
+
 /**
  * Trigger configuration stored in KV under "config:triggers".
  */
@@ -170,6 +182,7 @@ export interface LinearIssueDetails {
   priorityLabel: string;
   labels: Array<{ id: string; name: string }>;
   project?: { id: string; name: string } | null;
+  state?: { id?: string | null; name?: string | null } | null;
   assignee?: { id: string; name: string } | null;
   team: { id: string; key: string; name: string };
   comments: Array<{ body: string; user?: { name: string } }>;
@@ -204,4 +217,25 @@ export interface AgentSessionWebhook {
     promptContext?: string;
   };
   agentActivity?: { body?: string };
+}
+
+export interface IssueUpdateWebhook {
+  type: "Issue";
+  action: "update";
+  organizationId: string;
+  url?: string;
+  data: {
+    id: string;
+    identifier: string;
+    title: string;
+    url?: string;
+    project?: { id: string; name: string } | null;
+    projectState?: { id: string; name?: string } | null;
+    state?: { id?: string | null; name?: string | null } | null;
+    projectStateId?: string | null;
+    projectStatusId?: string | null;
+    stateId?: string | null;
+    stateName?: string | null;
+  };
+  updatedFrom?: Record<string, unknown>;
 }

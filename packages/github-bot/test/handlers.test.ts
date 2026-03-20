@@ -3,8 +3,10 @@ import type {
   Env,
   PullRequestOpenedPayload,
   ReviewRequestedPayload,
+  PullRequestReviewPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
+  CheckRunPayload,
 } from "../src/types";
 import type { Logger } from "../src/logger";
 import type { ResolvedGitHubConfig } from "../src/utils/integration-config";
@@ -19,6 +21,13 @@ vi.mock("../src/utils/internal", () => ({
   generateInternalToken: vi.fn().mockResolvedValue("test-internal-token"),
 }));
 
+vi.mock("../src/github-api", () => ({
+  fetchPullRequestDetails: vi.fn(),
+  fetchPullRequestFiles: vi.fn(),
+  fetchPullRequestReviewComments: vi.fn(),
+  mergePullRequest: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../src/utils/integration-config", () => ({
   getGitHubConfig: vi.fn().mockResolvedValue({
     model: "anthropic/claude-haiku-4-5",
@@ -28,6 +37,8 @@ vi.mock("../src/utils/integration-config", () => ({
     allowedTriggerUsers: null,
     codeReviewInstructions: null,
     commentActionInstructions: null,
+    lowRiskFileAllowGlobs: null,
+    lowRiskFileBlockGlobs: null,
   }),
 }));
 
@@ -39,6 +50,8 @@ const defaultConfig: ResolvedGitHubConfig = {
   allowedTriggerUsers: null,
   codeReviewInstructions: null,
   commentActionInstructions: null,
+  lowRiskFileAllowGlobs: null,
+  lowRiskFileBlockGlobs: null,
 };
 
 import {
@@ -46,9 +59,17 @@ import {
   handleReviewRequested,
   handleIssueComment,
   handleReviewComment,
+  handlePullRequestReview,
+  handleCheckRunEvent,
 } from "../src/handlers";
 import { generateInstallationToken, postReaction, checkSenderPermission } from "../src/github-auth";
 import { getGitHubConfig } from "../src/utils/integration-config";
+import {
+  fetchPullRequestDetails,
+  fetchPullRequestFiles,
+  fetchPullRequestReviewComments,
+  mergePullRequest,
+} from "../src/github-api";
 
 function createMockLogger(): Logger {
   return {
@@ -61,6 +82,7 @@ function createMockLogger(): Logger {
 }
 
 function createMockEnv(): Env {
+  const kvStore = new Map<string, string>();
   const controlPlaneFetch = vi.fn().mockImplementation((url: string) => {
     if (url === "https://internal/sessions") {
       return Promise.resolve(
@@ -72,11 +94,28 @@ function createMockEnv(): Env {
         new Response(JSON.stringify({ messageId: "msg-456" }), { status: 200 })
       );
     }
+    if (/\/merge-queue\/items\/.+/.test(url)) {
+      return Promise.resolve(new Response(JSON.stringify({ item: null }), { status: 200 }));
+    }
+    if (url === "https://internal/merge-queue/finalize") {
+      return Promise.resolve(
+        new Response(JSON.stringify({ item: null, nextItem: null }), { status: 200 })
+      );
+    }
     return Promise.resolve(new Response("Not found", { status: 404 }));
   });
 
   return {
-    GITHUB_KV: { get: vi.fn(), put: vi.fn() },
+    GITHUB_KV: {
+      get: vi.fn(async (key: string, type?: string) => {
+        const value = kvStore.get(key) ?? null;
+        if (value === null) return null;
+        return type === "json" ? JSON.parse(value) : value;
+      }),
+      put: vi.fn(async (key: string, value: string) => {
+        kvStore.set(key, value);
+      }),
+    },
     CONTROL_PLANE: { fetch: controlPlaneFetch },
     DEPLOYMENT_NAME: "test",
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
@@ -160,12 +199,64 @@ const reviewCommentPayload: ReviewCommentPayload = {
   sender: { login: "carol" },
 };
 
+const pullRequestReviewPayload: PullRequestReviewPayload = {
+  action: "submitted",
+  review: {
+    state: "changes_requested",
+    body: "Please fix the edge cases.",
+    user: { login: "test-bot[bot]" },
+  },
+  pull_request: {
+    number: 42,
+    title: "Add caching",
+    body: "Adds Redis caching",
+    user: { login: "alice" },
+    head: { ref: "feature/cache", sha: "abc123" },
+    base: { ref: "main" },
+    labels: [{ name: "open-inspect" }],
+  },
+  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  sender: { login: "test-bot[bot]" },
+};
+
+const checkRunPayload: CheckRunPayload = {
+  action: "completed",
+  check_run: {
+    id: 99,
+    name: "ci / unit",
+    status: "completed",
+    conclusion: "success",
+    pull_requests: [{ number: 42 }],
+    head_sha: "abc123",
+  },
+  repository: { owner: { login: "acme" }, name: "widgets", private: false },
+  sender: { login: "test-bot[bot]" },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(generateInstallationToken).mockResolvedValue("test-installation-token");
   vi.mocked(postReaction).mockResolvedValue(true);
   vi.mocked(checkSenderPermission).mockResolvedValue({ hasPermission: true });
   vi.mocked(getGitHubConfig).mockResolvedValue({ ...defaultConfig });
+  vi.mocked(fetchPullRequestDetails).mockResolvedValue({
+    number: 42,
+    title: "Add caching",
+    body: 'Adds Redis caching\n\n<!-- open-inspect:provenance {"source":"linear","issueId":"issue-1","issueIdentifier":"LIN-1","organizationId":"org-1","sessionId":"session-1","agentSessionId":"agent-1"} -->',
+    html_url: "https://github.com/acme/widgets/pull/42",
+    user: { login: "alice" },
+    labels: [{ name: "open-inspect" }],
+    draft: false,
+    mergeable: true,
+    state: "open",
+    head: { ref: "feature/cache", sha: "abc123" },
+    base: { ref: "main" },
+  });
+  vi.mocked(fetchPullRequestFiles).mockResolvedValue(["docs/readme.md"]);
+  vi.mocked(fetchPullRequestReviewComments).mockResolvedValue([
+    { path: "src/cache.ts", body: "Please fix this.", user: { login: "test-bot[bot]" } },
+  ]);
+  vi.mocked(mergePullRequest).mockResolvedValue(undefined);
 });
 
 describe("handlePullRequestOpened", () => {
@@ -427,6 +518,115 @@ describe("handleReviewRequested", () => {
     expect(generateInstallationToken).not.toHaveBeenCalled();
     expect(getControlPlaneFetch(env)).not.toHaveBeenCalled();
     expect(log.debug).toHaveBeenCalledWith("handler.repo_not_enabled", expect.anything());
+  });
+});
+
+describe("deterministic automation handlers", () => {
+  it("starts a remediation session when the bot requests changes on a Linear-origin PR", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+
+    const result = await handlePullRequestReview(
+      env,
+      log,
+      pullRequestReviewPayload,
+      "trace-remediate"
+    );
+
+    expect(result).toEqual({
+      outcome: "processed",
+      handler_action: "remediation_started",
+      session_id: "session-123",
+      message_id: "msg-456",
+    });
+
+    const cpFetch = getControlPlaneFetch(env);
+    const sessionCall = cpFetch.mock.calls.find(
+      ([url]: [string]) => url === "https://internal/sessions"
+    );
+    const promptCall = cpFetch.mock.calls.find(([url]: [string]) =>
+      /\/sessions\/.+\/prompt$/.test(url)
+    );
+    expect(sessionCall).toBeDefined();
+    expect(promptCall).toBeDefined();
+
+    const sessionBody = JSON.parse(sessionCall![1].body);
+    expect(sessionBody.branch).toBe("feature/cache");
+
+    const promptBody = JSON.parse(promptCall![1].body);
+    expect(promptBody.content).toContain("Required first step");
+    expect(promptBody.content).toContain("gh pr view 42");
+    expect(promptBody.content).toContain("Please fix the edge cases.");
+  });
+
+  it("auto-merges a queued PR only after approval, green checks, and low-risk classification", async () => {
+    const env = createMockEnv();
+    const log = createMockLogger();
+    const cpFetch = getControlPlaneFetch(env);
+    cpFetch.mockImplementation((url: string) => {
+      if (/\/merge-queue\/items\/.+/.test(url)) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              item: {
+                repoOwner: "acme",
+                repoName: "widgets",
+                baseBranch: "main",
+                prNumber: 42,
+                headBranch: "feature/cache",
+                headSha: "abc123",
+                linkedIssue: {
+                  issueId: "issue-1",
+                  issueIdentifier: "LIN-1",
+                  organizationId: "org-1",
+                },
+                status: "active",
+              },
+            }),
+            { status: 200 }
+          )
+        );
+      }
+      if (url === "https://internal/merge-queue/finalize") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ item: null, nextItem: null }), { status: 200 })
+        );
+      }
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    });
+    vi.mocked(getGitHubConfig).mockResolvedValue({
+      ...defaultConfig,
+      lowRiskFileAllowGlobs: ["docs/**"],
+      lowRiskFileBlockGlobs: [],
+    });
+
+    await handlePullRequestReview(
+      env,
+      log,
+      {
+        ...pullRequestReviewPayload,
+        review: {
+          ...pullRequestReviewPayload.review,
+          state: "approved",
+          body: "Looks good.",
+        },
+      },
+      "trace-approved"
+    );
+
+    const result = await handleCheckRunEvent(env, log, checkRunPayload, "trace-check-green");
+
+    expect(result).toEqual({
+      outcome: "processed",
+      handler_action: "check_run_updated",
+    });
+    expect(mergePullRequest).toHaveBeenCalledWith(
+      "test-installation-token",
+      "acme",
+      "widgets",
+      42,
+      "abc123"
+    );
   });
 });
 

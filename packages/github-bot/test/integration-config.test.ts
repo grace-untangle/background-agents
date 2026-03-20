@@ -45,6 +45,8 @@ describe("getGitHubConfig", () => {
               allowedTriggerUsers: null,
               codeReviewInstructions: "Be thorough",
               commentActionInstructions: null,
+              lowRiskFileAllowGlobs: ["docs/**"],
+              lowRiskFileBlockGlobs: ["docs/private/**"],
             },
           }),
           { status: 200 }
@@ -63,6 +65,8 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: null,
       codeReviewInstructions: "Be thorough",
       commentActionInstructions: null,
+      lowRiskFileAllowGlobs: ["docs/**"],
+      lowRiskFileBlockGlobs: ["docs/private/**"],
     });
     expect(log.warn).not.toHaveBeenCalled();
   });
@@ -81,6 +85,8 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: [],
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      lowRiskFileAllowGlobs: null,
+      lowRiskFileBlockGlobs: null,
     });
     expect(log.warn).toHaveBeenCalledWith(
       "config.fetch_error",
@@ -107,6 +113,8 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: [],
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      lowRiskFileAllowGlobs: null,
+      lowRiskFileBlockGlobs: null,
     });
     expect(log.warn).toHaveBeenCalledWith(
       "config.fetch_failed",
@@ -131,6 +139,8 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: [],
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      lowRiskFileAllowGlobs: null,
+      lowRiskFileBlockGlobs: null,
     });
   });
 
@@ -150,6 +160,8 @@ describe("getGitHubConfig", () => {
       allowedTriggerUsers: null,
       codeReviewInstructions: null,
       commentActionInstructions: null,
+      lowRiskFileAllowGlobs: null,
+      lowRiskFileBlockGlobs: null,
     });
     expect(log.warn).not.toHaveBeenCalled();
   });
